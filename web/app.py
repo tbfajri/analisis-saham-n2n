@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
+import os
 
 from services.data import get_ohlcv, get_info, get_financials
 from services.news import google_news_rss
@@ -20,21 +21,20 @@ from utils import rupiah, rupiah_short
 
 st.set_page_config(page_title="StockLab", layout="wide")
 
-def load_watchlist(path="watchlist.txt"):
+def load_watchlist(filename="watchlist.txt"):
+    base_dir = os.path.dirname(os.path.abspath(__file__))  # lokasi app.py
+    file_path = os.path.join(base_dir, filename)
+
     try:
-        with open(path, "r") as f:
+        with open(file_path, "r") as f:
             tickers = []
             for line in f:
                 t = line.strip().upper()
                 if not t:
                     continue
-
-                # kalau belum ada suffix .JK → tambahin
                 if not t.endswith(".JK"):
-                    t = f"{t}.JK"
-
+                    t += ".JK"
                 tickers.append(t)
-
             return tickers
 
     except FileNotFoundError:
