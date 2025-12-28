@@ -14,7 +14,10 @@ from services.relative import build_peer_table, calc_relative_snapshot, label_re
 from services.risk import risk_flags
 from services.fundamental_score import fundamental_score
 from services.verdict_engine import final_verdict
+from services.ai_news import gemini_news_summary
 
+from dotenv import load_dotenv
+load_dotenv()
 
 from utils import rupiah, rupiah_short
 
@@ -69,6 +72,39 @@ def trend_label(series):
     except Exception:
         return "N/A"
 
+def calc_risk_snapshot(
+    capital,
+    entry_price,
+    stop_price,
+    tp_price,
+    risk_pct=1.0
+):
+    # risk per share
+    risk_per_share = entry_price - stop_price
+    if risk_per_share <= 0:
+        return None
+
+    # uang yang siap dirisikokan
+    risk_amount = capital * (risk_pct / 100)
+
+    # ukuran posisi (lembar)
+    position_size = risk_amount / risk_per_share
+
+    # nilai posisi
+    position_value = position_size * entry_price
+
+    # reward
+    reward_per_share = tp_price - entry_price
+    rr_actual = reward_per_share / risk_per_share if risk_per_share > 0 else None
+
+    return {
+        "risk_amount": risk_amount,
+        "position_size": position_size,
+        "position_value": position_value,
+        "rr_actual": rr_actual,
+        "risk_pct": risk_pct,
+    }
+
 
 st.title("📈 StockLab — Analisis Saham End-to-End")
 
@@ -83,6 +119,15 @@ with st.sidebar:
     st.subheader("Valuation Assumption")
     target_pe = st.number_input("Target PE", min_value=1.0, value=12.0, step=1.0)
     target_pbv = st.number_input("Target PBV", min_value=0.1, value=2.0, step=0.1)
+    
+    st.subheader("Risk Management")
+    capital = st.number_input(
+        "Total Modal (Rp)",
+        min_value=1_000_000,
+        value=50_000_000,
+        step=1_000_000
+    )
+    risk_pct = st.slider("Risk per Trade (%)", 0.5, 2.0, 1.0, 0.25)
 
 df_raw = get_ohlcv(ticker, period=period, interval="1d")
 min_bars = 220 if period in ["2y", "5y"] else 120
@@ -136,6 +181,35 @@ else:
             f"  <small>{n.get('source','')} • {n.get('published','')}</small>",
             unsafe_allow_html=True
         )
+
+st.subheader("🧠 AI News Summary")
+
+@st.cache_data(ttl=3600)
+def cached_ai_news_summary(ticker, news):
+    return gemini_news_summary(news)
+
+if "ai_news_summary" not in st.session_state:
+    st.session_state.ai_news_summary = {}
+    
+# init session state (WAJIB)
+if "ai_summary" not in st.session_state:
+    st.session_state.ai_summary = None
+
+# tombol manual (hemat token)
+if st.button("Generate AI News Summary"):
+    with st.spinner("AI sedang merangkum berita..."):
+        summary = cached_ai_news_summary(ticker, news)
+        st.session_state.ai_news_summary[ticker] = summary
+        
+if ticker in st.session_state.ai_news_summary:
+    st.info(st.session_state.ai_news_summary[ticker])
+else:
+    st.caption("Belum ada AI summary untuk saham ini.")
+
+
+# tampilkan hasil
+if st.session_state.ai_summary:
+    st.info(st.session_state.ai_summary)
 
 
 # ---- 3) Financials 5Y
@@ -256,7 +330,6 @@ result = fundamental_score({
     "equity_ratio": equity_ratio,
     "fcf_series": fcf_series
 })
-
 
 st.header("🧮 Fundamental Scoring")
 
@@ -393,6 +466,44 @@ st.write({
 })
 
 st.plotly_chart(candle_chart(df, f"{ticker} | {period}"), use_container_width=True)
+
+st.header("⚠️ Risk Snapshot & Position Sizing")
+
+entry_price = (plan["entry_low"] + plan["entry_high"]) / 2
+
+risk = calc_risk_snapshot(
+    capital=capital,
+    entry_price=entry_price,
+    stop_price=plan["stop"],
+    tp_price=plan["tp"],
+    risk_pct=risk_pct,
+)
+
+if risk is None:
+    st.error("Risk setup tidak valid (entry <= stoploss).")
+else:
+    c1, c2, c3, c4 = st.columns(4)
+
+    with c1:
+        st.metric("Risk / Trade", f"{risk_pct:.2f}%")
+        st.caption(rupiah(risk["risk_amount"], 0))
+
+    with c2:
+        st.metric("Position Size (Rp)", rupiah(risk["position_value"], 0))
+        st.caption(f"≈ {int(risk['position_size']):,} lembar")
+
+    with c3:
+        st.metric("Stoploss", rupiah(plan["stop"], 0))
+        st.caption(f"Risk/share: {rupiah(entry_price - plan['stop'], 0)}")
+
+    with c4:
+        st.metric("RR (Actual)", f"1 : {risk['rr_actual']:.2f}")
+if risk["rr_actual"] < 2:
+    st.warning("⚠️ Risk:Reward < 1:2 — setup kurang ideal.")
+else:
+    st.success("✅ Risk:Reward memenuhi kriteria (≥ 1:2).")
+
+
 
 # ---- 6) Bandarmologi proxy
 st.header("6) Bandarmologi (Radar Akumulasi/Distribusi)")

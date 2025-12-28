@@ -36,48 +36,71 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return d
 
 
-def technical_plan(df: pd.DataFrame, rr=2.0, pullback_pct=0.02, atr_mult=1.5):
+def technical_plan(df: pd.DataFrame, rr=2.0, pullback_pct=0.03, atr_mult=1.2):
     last = df.iloc[-1]
+
     close = float(last["Close"])
-    ema20, ema50, ema200 = float(last["EMA20"]), float(last["EMA50"]), float(last["EMA200"])
+    ema20 = float(last["EMA20"])
+    ema50 = float(last["EMA50"])
+    ema200 = float(last["EMA200"])
     rsi14 = float(last["RSI14"])
     atr14 = float(last["ATR14"])
     vol = float(last["Volume"])
     vol_avg = float(last["VOL_AVG20"]) if float(last["VOL_AVG20"]) > 0 else 1.0
     vol_ratio = vol / vol_avg
 
+    # ---- Trend
     trend = "SIDEWAYS"
     if ema20 > ema50 > ema200:
         trend = "UPTREND"
     elif ema20 < ema50 < ema200:
         trend = "DOWNTREND"
 
+    # ---- Pullback (ke EMA20)
     pullback_ok = abs(close - ema20) / ema20 <= pullback_pct
-    rsi_ok = 40 <= rsi14 <= 60
+
+    # ---- RSI context (lebih fleksibel)
+    rsi_ok = 45 <= rsi14 <= 70 if trend == "UPTREND" else 40 <= rsi14 <= 60
+
+    # ---- Volume confirmation
     vol_ok = vol_ratio >= 1.2
 
-    # entry around EMA20
-    entry_low = ema20 * 0.99
-    entry_high = ema20 * 1.01
-    entry = entry_high
+    # ---- Entry (defensif)
+    entry_low = ema20 * 0.995
+    entry_high = ema20 * 1.005
+    entry = (entry_low + entry_high) / 2
 
-    # stoploss: max(EMA50 based, ATR based) -> lebih ketat? kita pilih yang lebih dekat agar risk manageable
-    sl_ema = ema50 * 0.98
+    # ---- Stoploss (logis, bukan dipaksa)
+    sl_ema = ema50 * 0.985
     sl_atr = entry - atr_mult * atr14
-    stop = max(sl_ema, sl_atr)  # lebih ketat (lebih tinggi)
+    stop = min(sl_ema, sl_atr)  # beri ruang napas
 
-    risk = max(0.01, entry - stop)
+    # ---- Risk check
+    risk = entry - stop
+    if risk <= 0:
+        return {
+            "setup_ok": False,
+            "reason": "Invalid risk (entry <= stop)"
+        }
+
+    # ---- Take profit
     tp = entry + rr * risk
 
-    setup_ok = (trend == "UPTREND") and pullback_ok and rsi_ok and vol_ok and (stop < entry)
+    setup_ok = (
+        trend == "UPTREND"
+        and pullback_ok
+        and rsi_ok
+        and vol_ok
+    )
 
     return {
         "close": close,
         "trend": trend,
         "rsi14": rsi14,
-        "vol_ratio": vol_ratio,
+        "vol_ratio": round(vol_ratio, 2),
         "entry_low": entry_low,
         "entry_high": entry_high,
+        "entry": entry,
         "stop": stop,
         "tp": tp,
         "rr": rr,
