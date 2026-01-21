@@ -118,5 +118,6 @@ pip install -r requirements.txt
 
 ### 2️⃣ Jalankan aplikasi
 ```bash
+cd web
 streamlit run app.py --server.address localhost --server.port 8501
 ```
